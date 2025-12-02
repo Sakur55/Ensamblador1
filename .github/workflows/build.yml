@@ -1,45 +1,34 @@
-name: Compilacion y Prueba del Ensamblador IA-32
+name: Compilar Ensamblador IA-32
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   build:
-    # Usamos Ubuntu para G++
-    runs-on: ubuntu-latest 
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
-        
-      - name: Instalar dependencias (G++)
-        run: |          
-          sudo apt-get update          
-          sudo apt-get install -y g++ 
-          
-      - name: Compilar Ensamblador C++
-        # Asumiendo que sus archivos son 'main.cpp' y 'ensamblador.cpp'
-        run: |          
-          g++ -std=c++17 main.cpp ensamblador.cpp -o ensamblador
-          
-      - name: Ejecutar el Ensamblador (Generar .hex y .txt)
-        # Su programa lee 'programa.asm' y genera los archivos de salida
-        run: |          
-          ./ensamblador programa.asm
-          
-      - name: Mostrar archivos generados (solo para verificar en log)
+
+      - name: Instalar dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ nasm
+
+      - name: Compilar ensamblador en C++
+        run: |
+          g++ -std=c++17 EnsambladorIA32.cpp -o ensamblador
+
+      - name: Ejecutar ensamblador (generar hex y tablas)
+        run: |
+          ./ensamblador
+
+      - name: Ensamblar programa.asm con NASM
+        run: |
+          nasm -f elf32 programa.asm -o programa.o
+          ld -m elf_i386 -s -o programa programa.o
+
+      - name: Mostrar archivos generados
         run: ls -la
-        
-      # === ESTE ES EL PASO CRUCIAL QUE FALTABA ===
-      - name: Subir Archivos de Ensamblaje (Hex y Reportes)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Archivos-Ensamblaje-Salida
-          # Se listan los archivos que genera su programa Ensamblador
-          path: |
-            programa.hex
-            simbolos.txt
-            referencias.txt
