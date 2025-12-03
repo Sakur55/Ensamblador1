@@ -23,13 +23,13 @@ struct ReferenciaPendiente {
 
 class EnsambladorIA32 {
 private:
-    int contador_posicion; // Contador de posición (CP)
-    unordered_map<string, int> tabla_simbolos; // Etiqueta -> Dirección (CP)
-    unordered_map<string, vector<ReferenciaPendiente>> referencias_pendientes; // Etiqueta -> Lista de refs
-    vector<uint8_t> codigo_hex; // Código máquina generado
+    int contador_posicion;
+    unordered_map<string, int> tabla_simbolos;
+    unordered_map<string, vector<ReferenciaPendiente>> referencias_pendientes;
+    vector<uint8_t> codigo_hex;
 
-    unordered_map<string, uint8_t> reg32_map; // Códigos de 32-bit (EAX=0, ECX=1, ...)
-    unordered_map<string, uint8_t> reg8_map;  // Códigos de 8-bit
+    unordered_map<string, uint8_t> reg32_map;
+    unordered_map<string, uint8_t> reg8_map;
 
     // --- MÉTODOS AUXILIARES ---
     void inicializar_mapas();
@@ -83,4 +83,5 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
+
 
