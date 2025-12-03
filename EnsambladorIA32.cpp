@@ -1,6 +1,10 @@
 #include "EnsambladorIA32.hpp"
 #include <cstdint>
 #include <cctype>
+#include <sstream>
+#include <algorithm>
+#include <iostream>
+#include <iomanip>
 
 using namespace std;
 
@@ -46,17 +50,22 @@ void EnsambladorIA32::limpiar_linea(string& linea) {
     transform(linea.begin(), linea.end(), linea.begin(), ::toupper);
 }
 
-bool EnsambladorIA32::es_etiqueta(const string& s) {
-    return !s.empty() && s.back() == ':';
-}
+bool EnsambladorIA32::separar_operandos(const string& linea_operandos, string& dest_str, string& src_str) {
+    stringstream ss(linea_operandos);
+    
+    // Leer el destino hasta la primera coma
+    if (!getline(ss, dest_str, ',')) return false;
 
-uint8_t EnsambladorIA32::generar_modrm(uint8_t mod, uint8_t reg, uint8_t rm) {
-    return (mod << 6) | (reg << 3) | rm;
-}
+    // Leer el resto como fuente, ignorando espacios iniciales
+    ss >> ws;
+    if (!getline(ss, src_str)) return false;
 
-void EnsambladorIA32::agregar_byte(uint8_t byte) {
-    codigo_hex.push_back(byte);
-    contador_posicion += 1;
+    // Limpiar espacios en ambos
+    limpiar_linea(dest_str);
+    limpiar_linea(src_str);
+
+    // Verificar que la fuente no esté vacía (es decir, que había un src después de la coma)
+    return !dest_str.empty() && !src_str.empty();
 }
 
 void EnsambladorIA32::agregar_dword(uint32_t dword) {
@@ -110,6 +119,43 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
     return true;
 }
 
+bool EnsambladorIA32::obtener_inmediato32(const string& str, uint32_t& immediate) {
+    string temp_str = str;
+    int base = 10;
+
+    if (!temp_str.empty() && temp_str.back() == 'H') {
+        temp_str.pop_back();
+        base = 16;
+    }
+    
+    // Pre-chequeo simple: si es solo "H", es inválido
+    if (temp_str.empty() && base == 16) return false;
+
+    try {
+        size_t pos;
+        immediate = stoul(temp_str, &pos, base);
+
+        // Si no se consumió toda la cadena, no es un número válido.
+        return pos == temp_str.size();
+    }
+    catch (...) {
+        // Captura invalid_argument o out_of_range
+        return false;
+    }
+}
+void EnsambladorIA32::agregar_byte(uint8_t byte) {
+    codigo_hex.push_back(byte);
+    contador_posicion += 1;
+}
+
+uint8_t EnsambladorIA32::generar_modrm(uint8_t mod, uint8_t reg, uint8_t rm) {
+    return (mod << 6) | (reg << 3) | rm;
+}
+
+bool EnsambladorIA32::es_etiqueta(const string& s) {
+    // La línea ya está limpia y en mayúsculas
+    return !s.empty() && s.back() == ':';
+}
 // -----------------------------------------------------------------------------
 // Procesamiento de líneas
 // -----------------------------------------------------------------------------
@@ -139,17 +185,17 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
     getline(ss, resto);
     limpiar_linea(resto);
 
-    if (mnem == "MOV") {
+if (mnem == "MOV") {
         procesar_mov(resto);
     }
     else if (mnem == "ADD") {
-        procesar_add(resto);
+        procesar_add(resto); //
     }
     else if (mnem == "SUB") {
-        procesar_sub(resto);
+        procesar_sub(resto); // 
     }
-    else if (mnem == "JMP") {
-        procesar_jmp(resto);
+    else if (mnem == "CMP") {
+        procesar_cmp(resto); // 
     }
     else if (mnem == "JE" || mnem == "JZ" ||
         mnem == "JNE" || mnem == "JNZ" ||
@@ -159,22 +205,16 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
         mnem == "JG" || mnem == "JGE") {
         procesar_condicional(mnem, resto);
     }
-    else if (mnem == "INT") {
-        stringstream imm_ss(resto);
-        string imm_str;
-        imm_ss >> imm_str;
-        try {
-            uint32_t immediate = stoul(
-                imm_str.back() == 'H'
-                ? imm_str.substr(0, imm_str.size() - 1)
-                : imm_str,
-                nullptr,
-                imm_str.back() == 'H' ? 16 : 10);
+else if (mnem == "INT") {
+        uint32_t immediate;
+        // Usamos la utilidad robusta
+        if (obtener_inmediato32(resto, immediate) && immediate <= 0xFF) {
             agregar_byte(0xCD);
             agregar_byte(static_cast<uint8_t>(immediate));
         }
-        catch (...) {
-            cerr << "Error: Formato de INT invalido: " << linea << endl;
+        else {
+            // Error si el formato es malo o el número es > 255 (INT requiere un byte)
+            cerr << "Error: Formato de INT invalido o inmediato fuera de rango (0-255): " << resto << endl;
         }
     }
     else {
@@ -183,139 +223,189 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
 }
 
 // -----------------------------------------------------------------------------
-// MOV / ADD / SUB
+// MOV 
 // -----------------------------------------------------------------------------
 
 void EnsambladorIA32::procesar_mov(const string& operandos) {
-    stringstream ss(operandos);
     string dest_str, src_str;
-
-    getline(ss, dest_str, ',');
-    ss >> ws;
-    getline(ss, src_str);
-
-    limpiar_linea(dest_str);
-    limpiar_linea(src_str);
+    if (!separar_operandos(operandos, dest_str, src_str)) {
+        cerr << "Error de sintaxis: Se esperaban 2 operandos para MOV." << endl;
+        return;
+    }
 
     uint8_t dest_code, src_code;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg = obtener_reg32(src_str, src_code);
 
-    // MOV REG, REG
+    // 1. MOV REG, REG (89 r/m32, r32)
     if (dest_is_reg && src_is_reg) {
         agregar_byte(0x89);
-        uint8_t modrm = generar_modrm(0b11, src_code, dest_code);
+        uint8_t modrm = generar_modrm(0b11, src_code, dest_code); // MOD=11 (registro), REG=src, R/M=dest
         agregar_byte(modrm);
         return;
     }
 
-    // MOV REG, INMEDIATO
-    if (dest_is_reg) {
-        try {
-            uint32_t immediate;
-            if (!src_str.empty() && src_str.back() == 'H') {
-                immediate = stoul(src_str.substr(0, src_str.size() - 1), nullptr, 16);
-            }
-            else {
-                immediate = stoul(src_str, nullptr, 10);
-            }
+    uint32_t immediate;
+    bool src_is_imm = obtener_inmediato32(src_str, immediate);
 
-            agregar_byte(0xB8 + dest_code);
-            agregar_dword(immediate);
-            return;
-        }
-        catch (...) {
-            cerr << "Error: Inmediato invalido en MOV: " << src_str << endl;
-            return;
-        }
+    // 2. MOV REG, INMEDIATO (B8+rd)
+    if (dest_is_reg && src_is_imm) {
+        agregar_byte(0xB8 + dest_code);
+        agregar_dword(immediate);
+        return;
     }
 
-    // MOV [ETIQUETA], REG
-    if (src_is_reg && dest_str.size() > 2 &&
-        dest_str.front() == '[' && dest_str.back() == ']') {
-
-        agregar_byte(0x89); // r/m32, r32
+    // Usaremos procesar_mem_simple para [ETIQUETA]
+    // 3. MOV [ETIQUETA], REG (89 r/m32, r32 - modo memoria)
+    if (src_is_reg) {
+        agregar_byte(0x89); // Opcode para r/m32, r32
         uint8_t modrm_byte;
+        // es_destino=true porque la memoria es el destino (ModR/M usa REG=src_code)
         if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
     }
 
-    // MOV REG, [ETIQUETA]
-    if (dest_is_reg && src_str.size() > 2 &&
-        src_str.front() == '[' && src_str.back() == ']') {
-
-        agregar_byte(0x8B); // r32, r/m32
+    // 4. MOV REG, [ETIQUETA] (8B r32, r/m32 - modo memoria)
+    if (dest_is_reg) {
+        agregar_byte(0x8B); // Opcode para r32, r/m32
         uint8_t modrm_byte;
+        // es_destino=false porque la memoria es la fuente (ModR/M usa REG=dest_code)
         if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
+    }
+    
+    // 5. MOV [ETIQUETA], INMEDIATO (C7 /0, imm32)
+    if (src_is_imm) {
+        agregar_byte(0xC7); // Opcode C7 /0
+        uint8_t modrm_byte;
+        // El campo REG debe ser 0b000 (extensión de opcode)
+        if (procesar_mem_simple(dest_str, modrm_byte, 0b000, true)) {
+            agregar_dword(immediate);
+            return;
+        }
     }
 
     cerr << "Error de sintaxis o modo no soportado para MOV: " << operandos << endl;
 }
-
-void EnsambladorIA32::procesar_add(const string& operandos) {
-    // Aquí podrías implementar ADD igual que SUB/MOV.
-    cerr << "Advertencia: Instruccion ADD aun no implementada: " << operandos << endl;
-}
-
-void EnsambladorIA32::procesar_sub(const string& operandos) {
-    stringstream ss(operandos);
+// -----------------------------------------------------------------------------
+// ADD, SUB, CMP (generalizado)
+// -----------------------------------------------------------------------------
+void EnsambladorIA32::procesar_binaria(
+    const string& mnem,
+    const string& operandos,
+    uint8_t opcode_rm_reg, // ej: 0x01 (ADD r/m32, r32)
+    uint8_t opcode_reg_rm, // ej: 0x03 (ADD r32, r/m32)
+    uint8_t opcode_eax_imm, // ej: 0x05 (ADD EAX, imm32)
+    uint8_t opcode_imm_general, // ej: 0x81 (ADD r/m32, imm)
+    uint8_t reg_field_extension // ej: 0b000 para ADD, 0b101 para SUB
+) {
     string dest_str, src_str;
-
-    getline(ss, dest_str, ',');
-    ss >> ws;
-    getline(ss, src_str);
-
-    limpiar_linea(dest_str);
-    limpiar_linea(src_str);
+    if (!separar_operandos(operandos, dest_str, src_str)) {
+        cerr << "Error de sintaxis: Se esperaban 2 operandos para " << mnem << endl;
+        return;
+    }
 
     uint8_t dest_code, src_code;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg = obtener_reg32(src_str, src_code);
-
-    // SUB REG, REG
+    
+    // 1. REG, REG (r/m32, r32)
     if (dest_is_reg && src_is_reg) {
-        agregar_byte(0x29);
-        uint8_t modrm = generar_modrm(0b11, src_code, dest_code);
+        agregar_byte(opcode_rm_reg); // ej: 0x01 para ADD, 0x29 para SUB
+        uint8_t modrm = generar_modrm(0b11, src_code, dest_code); // MOD=11 (registro), REG=src, R/M=dest
         agregar_byte(modrm);
         return;
     }
 
-    // SUB EAX, INMEDIATO (hex con H)
-    if (dest_is_reg && dest_code == 0 && src_str.size() > 1 && src_str.back() == 'H') {
-        try {
-            uint32_t immediate = stoul(src_str.substr(0, src_str.size() - 1), nullptr, 16);
-            agregar_byte(0x2D);
-            agregar_dword(immediate);
-            return;
-        }
-        catch (...) {
-            cerr << "Error: Inmediato invalido en SUB: " << src_str << endl;
-            return;
-        }
+    uint32_t immediate;
+    bool src_is_imm = obtener_inmediato32(src_str, immediate);
+
+    // 2. EAX, INMEDIATO (opcode dedicado)
+    if (dest_is_reg && dest_code == 0b000 && src_is_imm) { // EAX, imm
+        agregar_byte(opcode_eax_imm); // ej: 0x05 para ADD, 0x2D para SUB
+        agregar_dword(immediate);
+        return;
     }
 
-    // SUB [ETIQUETA], INMEDIATO pequeño
-    if (!dest_is_reg && dest_str.size() > 2 &&
-        dest_str.front() == '[' && dest_str.back() == ']' &&
-        src_str.size() > 1 && src_str.back() == 'H') {
-        try {
-            uint32_t immediate = stoul(src_str.substr(0, src_str.size() - 1), nullptr, 16);
-            if (immediate <= 0xFF) {
-                agregar_byte(0x83);   // 83 /5  -> SUB r/m32, imm8
-                uint8_t op_extension = 0b101;
-                uint8_t modrm_byte;
-                if (procesar_mem_simple(dest_str, modrm_byte, 0, true, op_extension)) {
-                    agregar_byte(static_cast<uint8_t>(immediate));
-                    return;
+    // Usaremos procesar_mem_simple para [ETIQUETA]
+
+    // 3. REG, [ETIQUETA] (r32, r/m32)
+    if (dest_is_reg) {
+        agregar_byte(opcode_reg_rm); // ej: 0x03 para ADD, 0x2B para SUB
+        uint8_t modrm_byte;
+        // es_destino=false porque la memoria es la fuente (ModR/M usa REG=dest_code)
+        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
+    }
+    
+    // 4. [ETIQUETA], REG (r/m32, r32)
+    if (src_is_reg) {
+        agregar_byte(opcode_rm_reg); // ej: 0x01 para ADD, 0x29 para SUB
+        uint8_t modrm_byte;
+        // es_destino=true porque la memoria es el destino (ModR/M usa REG=src_code)
+        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
+    }
+
+    // 5. [ETIQUETA], INMEDIATO (81 /extension, imm32)
+    // Usaremos la versión IMM8 (0x83 /extension, imm8) si cabe, ya que el proyecto incluye ejemplos con imm8.
+    if (src_is_imm) {
+        uint8_t opcode = opcode_imm_general; // ej: 0x81
+        bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF); // Si cabe en 8 bits con extensión de signo
+        
+        if (use_imm8) opcode = 0x83; // Opcode 0x83 para imm8 sign-extended
+
+        if (!dest_is_reg) { // Memoria, imm
+            agregar_byte(opcode);
+            uint8_t modrm_byte;
+            // El campo REG usa la extensión del opcode, R/M apunta a la memoria
+            if (procesar_mem_simple(dest_str, modrm_byte, reg_field_extension, true)) { 
+                if (use_imm8) {
+                    agregar_byte(static_cast<uint8_t>(immediate & 0xFF));
+                } else {
+                    agregar_dword(immediate);
                 }
+                return;
             }
         }
-        catch (...) {
-            cerr << "Error: Inmediato invalido en SUB memoria: " << src_str << endl;
-            return;
+    }
+    
+    // 6. REG, INMEDIATO (81 /extension, imm32) - Si no es EAX (ya manejado)
+    if (dest_is_reg && dest_code != 0b000 && src_is_imm) {
+        uint8_t opcode = opcode_imm_general; // ej: 0x81
+        bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF);
+        if (use_imm8) opcode = 0x83;
+
+        agregar_byte(opcode);
+        uint8_t modrm = generar_modrm(0b11, reg_field_extension, dest_code); // Mod=11 (reg), REG=extensión, R/M=dest
+        agregar_byte(modrm);
+        
+        if (use_imm8) {
+            agregar_byte(static_cast<uint8_t>(immediate & 0xFF));
+        } else {
+            agregar_dword(immediate);
         }
+        return;
     }
 
-    cerr << "Error de sintaxis o modo no soportado para SUB: " << operandos << endl;
+
+    cerr << "Error de sintaxis o modo no soportado para " << mnem << ": " << operandos << endl;
+}
+// -----------------------------------------------------------------------------
+// ADD, SUB, CMP (usando el generalizado)
+// -----------------------------------------------------------------------------
+void EnsambladorIA32::procesar_add(const string& operandos) {
+    // 0x01: ADD r/m32, r32; 0x03: ADD r32, r/m32; 0x05: ADD EAX, imm32
+    // 0x81: ADD r/m32, imm32; Extensión de opcode: /0 (0b000)
+    procesar_binaria("ADD", operandos, 0x01, 0x03, 0x05, 0x81, 0b000);
+}
+
+void EnsambladorIA32::procesar_sub(const string& operandos) {
+    // 0x29: SUB r/m32, r32; 0x2B: SUB r32, r/m32; 0x2D: SUB EAX, imm32
+    // 0x81: SUB r/m32, imm32; Extensión de opcode: /5 (0b101)
+    procesar_binaria("SUB", operandos, 0x29, 0x2B, 0x2D, 0x81, 0b101);
+}
+
+void EnsambladorIA32::procesar_cmp(const string& operandos) {
+    // 0x39: CMP r/m32, r32; 0x3B: CMP r32, r/m32; 0x3D: CMP EAX, imm32
+    // 0x81: CMP r/m32, imm32; Extensión de opcode: /7 (0b111)
+    procesar_binaria("CMP", operandos, 0x39, 0x3B, 0x3D, 0x81, 0b111);
 }
 
 // -----------------------------------------------------------------------------
