@@ -32,3 +32,12 @@ jobs:
 
       - name: Mostrar archivos generados
         run: ls -la
+
+      - name: Subir resultados del ensamblador
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultados-ensamblador
+          path: |
+            programa.hex
+            simbolos.txt
+            referencias.txt
