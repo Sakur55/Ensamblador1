@@ -16,9 +16,9 @@ using namespace std;
 // --- ESTRUCTURAS DE DATOS ---
 // Estructura para almacenar una referencia pendiente
 struct ReferenciaPendiente {
-    int posicion;           // Posición en codigo_hex donde se necesita el parche
-    int tamano_inmediato;   // 1 o 4 (byte o dword para el desplazamiento)
-    int tipo_salto;         // 0: Absoluto (dirección de etiqueta), 1: Relativo (dirección de salto)
+    int posicion;
+    int tamano_inmediato;
+    int tipo_salto;
 };
 
 class EnsambladorIA32 {
@@ -83,3 +83,4 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
+
