@@ -162,6 +162,11 @@ bool EnsambladorIA32::es_etiqueta(const string& s) {
     // La línea ya está limpia y en mayúsculas
     return !s.empty() && s.back() == ':';
 }
+void EnsambladorIA32::procesar_etiqueta(const string& etiqueta) {
+    // La clave es la etiqueta (ej. "INICIO", "LOOP")
+    // El valor es la posición actual del Contador de Posición (CP)
+    tabla_simbolos[etiqueta] = contador_posicion;
+}
 // -----------------------------------------------------------------------------
 // Procesamiento de líneas
 // -----------------------------------------------------------------------------
@@ -634,4 +639,5 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
