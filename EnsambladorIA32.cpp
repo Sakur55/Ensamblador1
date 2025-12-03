@@ -123,12 +123,18 @@ bool EnsambladorIA32::obtener_inmediato32(const string& str, uint32_t& immediate
     string temp_str = str;
     int base = 10;
 
+    // Manejar sufijo H (NASM style: FFFFH)
     if (!temp_str.empty() && temp_str.back() == 'H') {
         temp_str.pop_back();
         base = 16;
     }
+    // Manejar prefijo 0X (C/C++ style: 0X80)
+    else if (temp_str.size() > 2 && temp_str.substr(0, 2) == "0X") {
+        temp_str = temp_str.substr(2); // Eliminar "0X"
+        base = 16;
+    }
     
-    // Pre-chequeo simple: si es solo "H", es inválido
+    // Pre-chequeo simple: si es solo "H" o "0X", es inválido
     if (temp_str.empty() && base == 16) return false;
 
     try {
@@ -172,10 +178,6 @@ void EnsambladorIA32::procesar_linea(string linea) {
     procesar_instruccion(linea);
 }
 
-void EnsambladorIA32::procesar_etiqueta(const string& etiqueta) {
-    tabla_simbolos[etiqueta] = contador_posicion;
-}
-
 void EnsambladorIA32::procesar_instruccion(const string& linea) {
     stringstream ss(linea);
     string mnem;
@@ -183,19 +185,29 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
 
     string resto;
     getline(ss, resto);
-    limpiar_linea(resto);
+    limpiar_linea(resto); // Limpia el resto de la línea (operandos o directivas)
 
-if (mnem == "MOV") {
+    // --- 1. IGNORAR DIRECTIVAS ESTÁNDAR (SECTION, GLOBAL, etc.) ---
+    // Estas son directivas de NASM que no generan código máquina
+    if (mnem == "SECTION" || mnem == "GLOBAL" || mnem == "EXTERN" || mnem == "BITS") {
+        return; 
+    }
+
+    // --- 2. INSTRUCCIONES IA-32 IMPLEMENTADAS ---
+    if (mnem == "MOV") {
         procesar_mov(resto);
     }
     else if (mnem == "ADD") {
-        procesar_add(resto); //
+        procesar_add(resto);
     }
     else if (mnem == "SUB") {
-        procesar_sub(resto); // 
+        procesar_sub(resto);
     }
     else if (mnem == "CMP") {
-        procesar_cmp(resto); // 
+        procesar_cmp(resto);
+    }
+    else if (mnem == "JMP") {
+        procesar_jmp(resto);
     }
     else if (mnem == "JE" || mnem == "JZ" ||
         mnem == "JNE" || mnem == "JNZ" ||
@@ -205,7 +217,7 @@ if (mnem == "MOV") {
         mnem == "JG" || mnem == "JGE") {
         procesar_condicional(mnem, resto);
     }
-else if (mnem == "INT") {
+    else if (mnem == "INT") {
         uint32_t immediate;
         // Usamos la utilidad robusta
         if (obtener_inmediato32(resto, immediate) && immediate <= 0xFF) {
@@ -213,12 +225,29 @@ else if (mnem == "INT") {
             agregar_byte(static_cast<uint8_t>(immediate));
         }
         else {
-            // Error si el formato es malo o el número es > 255 (INT requiere un byte)
             cerr << "Error: Formato de INT invalido o inmediato fuera de rango (0-255): " << resto << endl;
         }
     }
+    // --- 3. ETIQUETAS DE DATOS (RESULTADO DD 0) ---
     else {
-        cerr << "Advertencia: Mnemónico no soportado: " << mnem << endl;
+        // Si no es una instrucción o directiva conocida, chequeamos si es una ETIQUETA DE DATOS.
+        // En este caso, 'mnem' es la ETIQUETA, y el inicio de 'resto' es la DIRECTIVA de datos.
+        
+        stringstream resto_ss(resto);
+        string directiva_dato;
+        resto_ss >> directiva_dato;
+        limpiar_linea(directiva_dato); // Aseguramos que la directiva esté limpia
+
+        if (directiva_dato == "DD") { // Define Doubleword (4 bytes)
+            procesar_etiqueta(mnem); // Agrega la etiqueta (ej. NUMERO, RESULTADO) a tabla_simbolos
+            contador_posicion += 4;  // Avanza el CP por el espacio de 4 bytes
+            return;
+        }
+        // Si es DB (Define Byte), usarías:
+        // else if (directiva_dato == "DB") { ... contador_posicion += 1; return; }
+
+        // Si falla todo, es una instrucción o directiva realmente no soportada.
+        cerr << "Advertencia: Mnemónico o directiva no soportada: " << mnem << endl;
     }
 }
 
@@ -605,3 +634,4 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
