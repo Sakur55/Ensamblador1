@@ -182,8 +182,7 @@ bool EnsambladorIA32::procesar_mem_sib(const string& operando,
     } 
     
     // --- 5. Referencia Pendiente (Disp32 para la dirección base de ARRAY) ---
-    
-    // Para ambos casos (disp8=0 o disp8=4), la dirección de ARRAY va aquí (Disp32).
+    if (mod == 0b00) { 
     string etiqueta = "ARRAY"; 
 
     ReferenciaPendiente ref;
@@ -192,7 +191,8 @@ bool EnsambladorIA32::procesar_mem_sib(const string& operando,
     ref.tipo_salto = 0; // absoluto
     referencias_pendientes[etiqueta].push_back(ref);
 
-    agregar_dword(0);   // placeholder para Disp32 (la dirección de ARRAY)
+    agregar_dword(0);   // placeholder para Disp32 (4 bytes)
+}
     
     return true; // Éxito en el parseo SIB
 }
@@ -1394,6 +1394,7 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
 
