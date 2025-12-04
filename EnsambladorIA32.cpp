@@ -128,126 +128,91 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
 bool EnsambladorIA32::procesar_mem_sib(const string& operando,
                                        uint8_t& modrm_byte,
                                        const uint8_t reg_code,
-                                       bool es_destino) {
-   
+                                       bool es_destino)
+{
     string op = operando;
-    if (op.size() < 2 || op.front() != '[' || op.back() != ']') return false;
-    op = op.substr(1, op.size() - 2); // quitar corchetes
-    limpiar_linea(op); // por si acaso: espacios y mayúsculas
+    if (op.size() < 2 || op.front() != '[' || op.back() != ']')
+        return false;
 
-    // Requerimos que contenga "ESI*4" y un identificador para la etiqueta (ARRAY)
-    // Buscamos "ESI*4"
+    // quitar corchetes
+    op = op.substr(1, op.size() - 2);
+    limpiar_linea(op);
+
+    // Debe contener ESI*4
     size_t pos_esi = op.find("ESI*4");
-    if (pos_esi == string::npos) return false;
+    if (pos_esi == string::npos)
+        return false;
 
-    // La etiqueta es la parte antes de "+ESI*4" o antes de "ESI*4" si no hay '+'
-    // Aceptamos formas como: "ARRAY+ESI*4", "ARRAY+ESI*4+4", "ARRAY+ESI*4-8"
-    string etiqueta;
-    size_t sep_before = (pos_esi == 0) ? string::npos : op.rfind('+', pos_esi);
-    size_t sep_before_minus = (pos_esi == 0) ? string::npos : op.rfind('-', pos_esi);
+    // Extraer etiqueta = todo lo que aparece ANTES de "ESI*4"
+    string etiqueta = op.substr(0, pos_esi);
 
-    // Mejor: tomar todo lo anterior a "ESI*4", y luego eliminar un '+' final si existe.
-    etiqueta = op.substr(0, pos_esi);
-    // Si etiqueta termina en '+' o '-', eliminarlo
-    while (!etiqueta.empty() && (etiqueta.back() == '+' || etiqueta.back() == '-' || isspace((unsigned char)etiqueta.back()))) {
+    // eliminar +, -, espacios finales
+    while (!etiqueta.empty() &&
+           (etiqueta.back() == '+' || etiqueta.back() == '-' ||
+            isspace((unsigned char)etiqueta.back())))
+    {
         etiqueta.pop_back();
     }
-    limpiar_linea(etiqueta);
-    if (etiqueta.empty()) return false; // se esperaba etiqueta
 
-    // Buscar desplazamiento (opcional) que viene DESPUÉS de "ESI*4"
+    limpiar_linea(etiqueta);
+    if (etiqueta.empty())
+        return false;   // se esperaba etiqueta base
+
+    // Buscar desplazamiento (opcional) DESPUÉS de "ESI*4"
     int64_t displacement = 0;
     bool tiene_disp = false;
+
     size_t pos_after = pos_esi + string("ESI*4").size();
-    if (pos_after < op.size()) {
-        // Debe comenzar con '+' o '-'
+    if (pos_after < op.size())
+    {
         string tail = op.substr(pos_after);
         limpiar_linea(tail);
-        if (!tail.empty()) {
-            // extraer número con posible signo
+
+        if (!tail.empty())
+        {
             try {
-                // stoi acepta signo al inicio
-                displacement = stoi(tail);
+                displacement = stoi(tail);  // acepta signo
                 tiene_disp = true;
             } catch (...) {
-                // No es un desplazamiento válido -> no reconocido
-                return false;
+                return false;  // desplazamiento inválido
             }
         }
     }
 
-    // Determinamos MOD y tamaño de desplazamiento final
     uint8_t mod = 0b00;
-    int disp_size = 0; // 0,1,4
-    if (tiene_disp) {
-        if (displacement >= -128 && displacement <= 127) {
-            mod = 0b01; // disp8
-            disp_size = 1;
-        } else {
-            mod = 0b10; // disp32
-            disp_size = 4;
-        }
-    } else {
+    int disp_size = 4;  // SIEMPRE disp32
 
-        mod = 0b00;
-        disp_size = 0; 
-    }
+    // SIB fields
+    uint8_t scale = 0b10;   // x4
+    uint8_t index = 0b110;  // ESI
+    uint8_t base  = 0b101;  // base=disp32 (addressing absoluto)
 
-    // Campos SIB:
-    // scale = 10 (x4)
-    // index = ESI (110)
-    // base  = ? (si MOD=00 y queremos direccion absoluta por SIB -> base=101)
-    uint8_t scale = 0b10;
-    uint8_t index = 0b110; // ESI
-    uint8_t base;
-
-    // Si MOD=00 y no hay desplazamiento proporcionado por usuario, debemos usar base=101 (disp32)
-    // para referenciar la etiqueta (ARRAY) a través de disp32 (porque en esta forma el addressing es: [disp32 + index*scale])
-    if (mod == 0b00) {
-        base = 0b101; // indica que después del SIB viene disp32 (la dirección base)
-        // En este caso necesitamos emitir disp32 (la referencia a la etiqueta)
-        disp_size = 4;
-    } else {
-       
-        base = 0b101;
-    }
-
-    // R/M = 100 (indica SIB follows)
+    // R/M = 100 → indica que sigue SIB
     uint8_t rm = 0b100;
-    uint8_t reg_field = reg_code; // el campo REG lo entrega el llamador
+    uint8_t reg_field = reg_code;
 
-    // Construir ModR/M byte (se devolverá y además lo escribiremos en el stream)
+    // Construir y escribir ModR/M
     modrm_byte = generar_modrm(mod, reg_field, rm);
+    agregar_byte(modrm_byte);
 
-    // ---- Escribir en el orden correcto: ModR/M, SIB, Disp ----
-    agregar_byte(modrm_byte); // escribir ModR/M ahora
-
+    // Construir y escribir SIB
     uint8_t sib_byte = (scale << 6) | (index << 3) | base;
     agregar_byte(sib_byte);
 
-    // Si disp_size == 1 => emitimos disp8 (valor inmediato)
-    if (disp_size == 1) {
-        agregar_byte(static_cast<uint8_t>(displacement & 0xFF));
-    }
-    // Si disp_size == 4 => puede ser:
-    //  - referencia a etiqueta (ARRAY) -> debemos dejar placeholder y registrar referencia pendiente
-    //  - o un desplazamiento inmediato grande -> emitimos dword
-    else if (disp_size == 4) {
-        // Si no había desplazamiento explícito (tiene_disp == false), se trata de la etiqueta ARRAY (referencia)
-        if (!tiene_disp) {
-            // Registramos la referencia pendiente para la etiqueta
-            ReferenciaPendiente ref;
-            ref.posicion = contador_posicion;  // posición donde comienza el dword placeholder
-            ref.tamano_inmediato = 4;
-            ref.tipo_salto = 0; // absoluto (dirección)
-            referencias_pendientes[etiqueta].push_back(ref);
+    // --- Emitir disp32 ---
+    // SIEMPRE existe disp32 porque base=101 y mod=00
+    {
+        ReferenciaPendiente ref;
+        ref.posicion = contador_posicion;
+        ref.tamano_inmediato = 4;
+        ref.tipo_salto = 0;            // direccion absoluta
+        referencias_pendientes[etiqueta].push_back(ref);
 
-            agregar_dword(0); // placeholder disp32 que será parcheado luego
-        } else {
-            // Tenemos un desplazamiento explícito de 32 bits: escribirlo como little-endian
-            agregar_dword(static_cast<uint32_t>(displacement));
-        }
+        // Guardamos el displacement como parte del placeholder.
+        // El resolver final hará: dirección(etiqueta) + displacement
+        agregar_dword((uint32_t) displacement);
     }
+
     return true;
 }
 
@@ -1441,6 +1406,7 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
 
