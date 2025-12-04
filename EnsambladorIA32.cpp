@@ -433,11 +433,11 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
 void EnsambladorIA32::procesar_binaria(
     const string& mnem,
     const string& operandos,
-    uint8_t opcode_rm_reg, // ej: 0x01 (ADD r/m32, r32)
-    uint8_t opcode_reg_rm, // ej: 0x03 (ADD r32, r/m32)
-    uint8_t opcode_eax_imm, // ej: 0x05 (ADD EAX, imm32)
-    uint8_t opcode_imm_general, // ej: 0x81 (ADD r/m32, imm)
-    uint8_t reg_field_extension // ej: 0b000 para ADD, 0b101 para SUB
+    uint8_t opcode_rm_reg, 
+    uint8_t opcode_reg_rm, 
+    uint8_t opcode_eax_imm, 
+    uint8_t opcode_imm_general, 
+    uint8_t reg_field_extension 
 ) {
     string dest_str, src_str;
     if (!separar_operandos(operandos, dest_str, src_str)) {
@@ -451,8 +451,8 @@ void EnsambladorIA32::procesar_binaria(
     
     // 1. REG, REG (r/m32, r32)
     if (dest_is_reg && src_is_reg) {
-        agregar_byte(opcode_rm_reg); // ej: 0x01 para ADD, 0x29 para SUB
-        uint8_t modrm = generar_modrm(0b11, src_code, dest_code); // MOD=11 (registro), REG=src, R/M=dest
+        agregar_byte(opcode_rm_reg); 
+        uint8_t modrm = generar_modrm(0b11, src_code, dest_code); 
         agregar_byte(modrm);
         return;
     }
@@ -461,50 +461,98 @@ void EnsambladorIA32::procesar_binaria(
     bool src_is_imm = obtener_inmediato32(src_str, immediate);
 
     // 2. EAX, INMEDIATO (opcode dedicado)
-    if (dest_is_reg && dest_code == 0b000 && src_is_imm) { // EAX, imm
-        agregar_byte(opcode_eax_imm); // ej: 0x05 para ADD, 0x2D para SUB
+    if (dest_is_reg && dest_code == 0b000 && src_is_imm) { 
+        agregar_byte(opcode_eax_imm); 
         agregar_dword(immediate);
         return;
     }
 
-    // Usaremos procesar_mem_simple para [ETIQUETA]
-
-    // 3. REG, [ETIQUETA] (r32, r/m32)
-    if (dest_is_reg && !src_is_imm) { // <--- CAMBIO AQUÍ: ¡Si la fuente NO es inmediato!
-        agregar_byte(opcode_reg_rm); // ej: 0x03 para ADD, 0x2B para SUB, 0x3B para CMP
+    // 3. REG, [MEM] (r32, r/m32) - Memoria es FUENTE
+    if (dest_is_reg && !src_is_imm) {
+        agregar_byte(opcode_reg_rm); // ej: 0x03 (ADD r32, r/m32)
         uint8_t modrm_byte;
-        // es_destino=false porque la memoria es la fuente (ModR/M usa REG=dest_code)
-        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
-        if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) return;
+        
+        // El registro de destino va en el campo REG del ModR/M (dest_code)
+        
+        // Intentar Base + Desplazamiento
+        if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+        
+        // Intentar SIB
+        if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+
+        // Intentar Memoria Simple (Etiqueta)
+        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
     }
     
-    // 4. [ETIQUETA], REG (r/m32, r32)
-    if (src_is_reg && !src_is_imm) { // <--- CAMBIO AQUÍ: ¡Si la fuente NO es inmediato!
-        agregar_byte(opcode_rm_reg); // ej: 0x01 para ADD, 0x29 para SUB, 0x39 para CMP
+    // 4. [MEM], REG (r/m32, r32) - Memoria es DESTINO
+    if (src_is_reg && !src_is_imm) {
+        agregar_byte(opcode_rm_reg); // ej: 0x01 (ADD r/m32, r32)
         uint8_t modrm_byte;
-        // es_destino=true porque la memoria es el destino (ModR/M usa REG=src_code)
-        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
-        if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) return;
+        
+        // El registro de fuente va en el campo REG del ModR/M (src_code)
+        
+        // Intentar Base + Desplazamiento
+        if (procesar_mem_disp(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+        
+        // Intentar SIB
+        if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+        
+        // Intentar Memoria Simple (Etiqueta)
+        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
     }
 
-    // 5. [ETIQUETA], INMEDIATO (81 /extension, imm32)
-    // Usaremos la versión IMM8 (0x83 /extension, imm8) si cabe, ya que el proyecto incluye ejemplos con imm8.
+    // 5. [MEM], INMEDIATO (81 /extension, imm32)
     if (src_is_imm) {
-        uint8_t opcode = opcode_imm_general; // ej: 0x81
-        bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF); // Si cabe en 8 bits con extensión de signo
-        
-        if (use_imm8) opcode = 0x83; // Opcode 0x83 para imm8 sign-extended
+        uint8_t opcode = opcode_imm_general; 
+        // Lógica de imm8 (0x83) o imm32 (0x81)
+        bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF);
+        if (use_imm8) opcode = 0x83;
 
         if (!dest_is_reg) { // Memoria, imm
             agregar_byte(opcode);
             uint8_t modrm_byte;
-            // El campo REG usa la extensión del opcode, R/M apunta a la memoria
-            if (procesar_mem_simple(dest_str, modrm_byte, reg_field_extension, true)) { 
-                if (use_imm8) {
-                    agregar_byte(static_cast<uint8_t>(immediate & 0xFF));
-                } else {
-                    agregar_dword(immediate);
-                }
+            
+            // El campo REG usa la extensión del opcode (reg_field_extension)
+            
+            // Intentar Base + Desplazamiento
+            if (procesar_mem_disp(dest_str, modrm_byte, reg_field_extension, true)) {
+                agregar_byte(modrm_byte); 
+                if (use_imm8) { agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); } 
+                else { agregar_dword(immediate); }
+                return;
+            }
+            
+            // Intentar SIB
+            if (procesar_mem_sib(dest_str, modrm_byte, reg_field_extension, true)) {
+                agregar_byte(modrm_byte);
+                if (use_imm8) { agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); } 
+                else { agregar_dword(immediate); }
+                return;
+            }
+            
+            // Intentar Memoria Simple
+            if (procesar_mem_simple(dest_str, modrm_byte, reg_field_extension, true)) {
+                agregar_byte(modrm_byte);
+                if (use_imm8) { agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); } 
+                else { agregar_dword(immediate); }
                 return;
             }
         }
@@ -512,7 +560,7 @@ void EnsambladorIA32::procesar_binaria(
     
     // 6. REG, INMEDIATO (81 /extension, imm32) - Si no es EAX (ya manejado)
     if (dest_is_reg && dest_code != 0b000 && src_is_imm) {
-        uint8_t opcode = opcode_imm_general; // ej: 0x81
+        uint8_t opcode = opcode_imm_general; 
         bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF);
         if (use_imm8) opcode = 0x83;
 
@@ -921,11 +969,11 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
     if (src_is_reg && src_code == 0b000) { 
         string etiqueta_mem;
         if (dest_str.front() == '[' && dest_str.back() == ']') {
-             string temp_op = dest_str.substr(1, dest_str.size() - 2);
-             // Evitar A3 si parece ser SIB o inmediato (solo para etiquetas simples)
-             if (obtener_inmediato32(temp_op, immediate) || temp_op.find("ESI") != string::npos) {
-                 // No usar A3
-             } else {
+            string temp_op = dest_str.substr(1, dest_str.size() - 2);
+            // Evitar A3 si parece ser SIB o inmediato (solo para etiquetas simples)
+            if (obtener_inmediato32(temp_op, immediate) || temp_op.find("ESI") != string::npos) {
+                // No usar A3
+            } else {
                 agregar_byte(0xA3); 
                 etiqueta_mem = temp_op; 
 
@@ -937,7 +985,7 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
 
                 agregar_dword(0); 
                 return;
-             }
+            }
         }
     }
 
@@ -946,8 +994,19 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         agregar_byte(0x89); 
         uint8_t modrm_byte;
         
-        if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) return;
-        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
+        // La memoria es el DESTINO, el registro es la FUENTE (va en el campo REG)
+        if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+        if (procesar_mem_disp(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
+        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) {
+            agregar_byte(modrm_byte);
+            return;
+        }
     }
 
     // 4. MOV REG, [MEM] (8B r32, r/m32). MEMORIA ES FUENTE.
@@ -955,14 +1014,24 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         agregar_byte(0x8B); // Opcode 8B
         uint8_t modrm_byte;
         
+        // La memoria es la FUENTE, el registro es el DESTINO (va en el campo REG)
         // 1. Intentar SIB
-        if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) return;
+        if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
         
-        // 2. Intentar Base + Desplazamiento [EBP+disp] <--- ¡NUEVO!
-        if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) return;
+        // 2. Intentar Base + Desplazamiento [EBP+disp]
+        if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte); 
+            return;
+        }
         
         // 3. Intentar Memoria Simple
-        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
+        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) {
+            agregar_byte(modrm_byte);
+            return;
+        }
     }
     
     // 5. MOV [MEM], INMEDIATO (C7 /0, imm32)
@@ -970,14 +1039,22 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         agregar_byte(0xC7); 
         uint8_t modrm_byte;
         
+        // El campo REG debe ser 0b000 (/0)
+        // La memoria es el DESTINO
         if (procesar_mem_sib(dest_str, modrm_byte, 0b000, true)) {
-             agregar_dword(immediate);
-             return;
+            agregar_byte(modrm_byte); 
+            agregar_dword(immediate);
+            return;
         }
-
+        if (procesar_mem_disp(dest_str, modrm_byte, 0b000, true)) {
+            agregar_byte(modrm_byte); 
+            agregar_dword(immediate);
+            return;
+        }
         if (procesar_mem_simple(dest_str, modrm_byte, 0b000, true)) {
-             agregar_dword(immediate);
-             return;
+            agregar_byte(modrm_byte); 
+            agregar_dword(immediate);
+            return;
         }
     }
 
@@ -997,56 +1074,87 @@ bool EnsambladorIA32::procesar_mem_disp(const string& operando,
 
     op = op.substr(1, op.size() - 2); // Remueve corchetes
     
-    // Simplificación: Solo buscamos EBP (o un registro de 32 bits y un desplazamiento)
-    if (op.find("EBP") == string::npos) return false;
+    // --- 1. Parsing y validación del registro base ---
+    // Simplificación: Buscamos un registro (ej. EBP) y un desplazamiento.
+    // Usaremos un parser simple. En este caso, solo soportamos [REG+/-DISP].
     
+    // Suponemos que la sintaxis es REG+/-DISP (limpiar_linea puso todo en mayúsculas)
     uint8_t base_code;
-    // Debemos parsear para soportar [EBP+disp]. Asumimos que es EBP (0b101).
-    if (!obtener_reg32("EBP", base_code)) return false; 
-    
+    string base_reg_str;
     int displacement = 0;
     
-    size_t sign_pos = op.find('+');
-    if (sign_pos == string::npos) sign_pos = op.find('-');
+    // Buscamos si la línea contiene EAX, ECX, etc., para identificar el registro base
+    size_t reg_end_pos = string::npos;
+
+    // Buscar el registro base. Asumiremos que el registro es la primera palabra o parte.
+    // Una implementación completa requeriría un parser más robusto.
+    // Nos enfocaremos en EBP, que es lo más común para esta función.
+    if (op.find("EBP") != string::npos) {
+        base_reg_str = "EBP";
+        reg_end_pos = op.find("EBP") + 3; // Longitud de "EBP"
+    } else {
+        // Podrías agregar otros registros si los necesitas (ej. EBX, EAX)
+        return false;
+    }
+    
+    if (!obtener_reg32(base_reg_str, base_code)) return false; 
+    
+    // --- 2. Extracción del Desplazamiento ---
+    size_t sign_pos = op.find('+', reg_end_pos);
+    if (sign_pos == string::npos) sign_pos = op.find('-', reg_end_pos);
     
     if (sign_pos != string::npos) {
         // La parte restante es el desplazamiento (ej: "+8" o "8")
         string disp_str = op.substr(sign_pos); 
-        
-        // Limpiar espacios en la parte del número (si existen)
-        stringstream ss(disp_str);
-        ss >> displacement; // Esto maneja "+8", "-12", etc.
-    }
-
-    
-    // Extracción simplificada del desplazamiento (ej: "+8", "+20").
-    // Buscamos el signo '+' o '-' y parseamos el resto.
-    
-    if (sign_pos != string::npos) {
-        string disp_str = op.substr(sign_pos); // Ej: "+8"
         try {
-            // stoul lo maneja como unsigned, stoi lo maneja como signed (más seguro aquí)
+            // stoll (long long) es más seguro para asegurar que el desplazamiento cabe en int
             displacement = stoi(disp_str); 
-        } catch(...) {
+        } catch (...) {
+            // Si no se puede convertir a número, es inválido.
             return false;
         }
-    } 
+    }
+    // Si sign_pos == npos, displacement es 0. [EBP] -> [EBP+0] (handled by MOD=01, disp8=0)
+
+    // --- 3. Codificación ModR/M y Determinación del MOD ---
     
-    // Para desplazamientos de 8, 12, 16, 20 bytes (caben en 8 bits sign-extended)
-    // Usaremos Mod=01 (disp8) si el desplazamiento cabe en un byte.
-    uint8_t mod = 0b01; // Usamos 0b01 (disp8)
-    uint8_t rm = base_code; // R/M = EBP (101)
-    uint8_t reg_field = reg_code; 
-    
+    uint8_t mod;
+    int disp_size; // 0, 1 (disp8), o 4 (disp32)
+
+    // Verificación de rango (para determinar si es Disp8 o Disp32)
+    if (displacement == 0) {
+        // Aunque [EBP] es MOD=00, R/M=101, [EBP+0] usa MOD=01 con disp8=0.
+        mod = 0b01; 
+        disp_size = 1;
+    } else if (displacement >= -128 && displacement <= 127) {
+        // Desplazamiento de 8 bits (Disp8)
+        mod = 0b01; 
+        disp_size = 1;
+    } else {
+        // Desplazamiento de 32 bits (Disp32)
+        mod = 0b10;
+        disp_size = 4;
+    }
+
+    uint8_t rm = base_code; // R/M es el código del registro base (ej. EBP: 0b101)
+    uint8_t reg_field = reg_code; // El registro R de la instrucción
+
+    // 1. Calcular el ModR/M byte.
     modrm_byte = generar_modrm(mod, reg_field, rm);
-    agregar_byte(modrm_byte); 
-    
-    // Agregar el desplazamiento de 8 bits
-    if (mod == 0b01) {
+
+    // --- 4. Agregar Desplazamiento (Disp8 o Disp32) ---
+    if (disp_size == 1) {
+        // Disp8 (se extiende el signo)
         agregar_byte(static_cast<uint8_t>(displacement & 0xFF));
+    } else if (disp_size == 4) {
+        // Disp32
+        agregar_dword(static_cast<uint32_t>(displacement));
     }
     
-    return true;
+    // Nota: Si el R/M fuera ESP (0b100), se requeriría un byte SIB extra.
+    // Dado que estás usando esta función para "disp", asumimos que no es SIB.
+
+    return true; // Éxito en el parseo
 }
 
 void EnsambladorIA32::procesar_movzx(const string& operandos) {
@@ -1286,5 +1394,6 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
