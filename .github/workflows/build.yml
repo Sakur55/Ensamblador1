@@ -1,4 +1,4 @@
-name: Compilar Ensamblador IA-32 
+name: Compilar Ensamblador IA-32  
 
 on:
   push:
