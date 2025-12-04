@@ -91,6 +91,7 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
     const uint8_t reg_code,
     bool es_destino,
     uint8_t op_extension) {
+
     string op = operando;
     if (op.front() == '[' && op.back() == ']') {
         op = op.substr(1, op.size() - 2);
@@ -99,6 +100,10 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
         return false;
     }
 
+    // Normalizar la etiqueta: trim y uppercase
+    limpiar_linea(op);
+
+    // Ahora op es la etiqueta limpia
     string etiqueta = op;
 
     uint8_t mod = 0b00;
@@ -113,11 +118,14 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
     ref.posicion = contador_posicion;
     ref.tamano_inmediato = 4;
     ref.tipo_salto = 0; // absoluto
+
+    // Usamos la etiqueta ya limpia para registrar la referencia
     referencias_pendientes[etiqueta].push_back(ref);
 
     agregar_dword(0);  // placeholder
     return true;
 }
+
 
 // -----------------------------------------------------------------------------
 // Direccionamiento indexado [ETIQUETA + ESI*4 + disp]
@@ -1406,6 +1414,7 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
 
