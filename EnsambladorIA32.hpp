@@ -55,7 +55,7 @@ private:
                           uint8_t reg_field_extension);
 
     // Declaraciones de procesamiento de instrucciones
-        void procesar_mov(const string& operandos);
+    void procesar_mov(const string& operandos);
     void procesar_add(const string& operandos);
     void procesar_sub(const string& operandos);
     void procesar_cmp(const string& operandos);
@@ -114,5 +114,6 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
+
 
 
