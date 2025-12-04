@@ -107,7 +107,6 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
     uint8_t reg_field = es_destino ? op_extension : reg_code;
 
     modrm_byte = generar_modrm(mod, reg_field, rm);
-    agregar_byte(modrm_byte);
 
     // El desplazamiento empieza justo después del ModR/M
     ReferenciaPendiente ref;
@@ -1287,3 +1286,4 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
