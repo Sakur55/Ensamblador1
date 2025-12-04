@@ -1006,7 +1006,17 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
                 ref.posicion = contador_posicion;
                 ref.tamano_inmediato = 4;
                 ref.tipo_salto = 0;
-                referencias_pendientes[etiqueta_mem].push_back(ref);
+                string etiqueta_limpia = etiqueta_mem;
+                limpiar_linea(etiqueta_limpia);
+
+                // Cuando se cae aquí, la etiqueta SIEMPRE debe ser la base antes del primer '+'
+                size_t pos_plus = etiqueta_limpia.find('+');
+                if (pos_plus != string::npos)
+                    etiqueta_limpia = etiqueta_limpia.substr(0, pos_plus);
+
+                limpiar_linea(etiqueta_limpia); // limpiar nuevamente
+                
+                referencias_pendientes[etiqueta_limpia].push_back(ref);
 
                 agregar_dword(0); 
                 return;
@@ -1414,6 +1424,7 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
 
