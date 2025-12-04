@@ -162,7 +162,7 @@ bool EnsambladorIA32::procesar_mem_sib(const string& operando,
     uint8_t reg_field = reg_code; 
 
     modrm_byte = generar_modrm(mod, reg_field, rm);
-    agregar_byte(modrm_byte); 
+
 
     // SIB Byte: Define Index, Scale y Base.
     // SCALE: 0b10 (x4)
@@ -1286,4 +1286,5 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
