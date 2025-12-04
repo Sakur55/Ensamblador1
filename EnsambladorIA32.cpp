@@ -126,76 +126,131 @@ bool EnsambladorIA32::procesar_mem_simple(const string& operando,
 // Direccionamiento indexado [ETIQUETA + ESI*4 (+ disp)]
 // -----------------------------------------------------------------------------
 bool EnsambladorIA32::procesar_mem_sib(const string& operando,
-                                 uint8_t& modrm_byte,
-                                 const uint8_t reg_code,
-                                 bool es_destino) {
-    
+                                       uint8_t& modrm_byte,
+                                       const uint8_t reg_code,
+                                       bool es_destino) {
+   
     string op = operando;
-    if (op.front() != '[' || op.back() != ']') return false;
+    if (op.size() < 2 || op.front() != '[' || op.back() != ']') return false;
+    op = op.substr(1, op.size() - 2); // quitar corchetes
+    limpiar_linea(op); // por si acaso: espacios y mayúsculas
 
-    // Removemos los corchetes
-    op = op.substr(1, op.size() - 2); 
-    
-    // --- 1. Detección del Patrón SIB requerido ---
-    // Buscamos los componentes clave 'ARRAY' y 'ESI*4' (sin espacios si limpiar_linea fue muy agresivo).
-    // Si no encontramos el patrón exacto, salimos.
-    if (op.find("ARRAY") == string::npos || 
-        op.find("ESI*4") == string::npos) {
-        return false;
+    // Requerimos que contenga "ESI*4" y un identificador para la etiqueta (ARRAY)
+    // Buscamos "ESI*4"
+    size_t pos_esi = op.find("ESI*4");
+    if (pos_esi == string::npos) return false;
+
+    // La etiqueta es la parte antes de "+ESI*4" o antes de "ESI*4" si no hay '+'
+    // Aceptamos formas como: "ARRAY+ESI*4", "ARRAY+ESI*4+4", "ARRAY+ESI*4-8"
+    string etiqueta;
+    size_t sep_before = (pos_esi == 0) ? string::npos : op.rfind('+', pos_esi);
+    size_t sep_before_minus = (pos_esi == 0) ? string::npos : op.rfind('-', pos_esi);
+
+    // Mejor: tomar todo lo anterior a "ESI*4", y luego eliminar un '+' final si existe.
+    etiqueta = op.substr(0, pos_esi);
+    // Si etiqueta termina en '+' o '-', eliminarlo
+    while (!etiqueta.empty() && (etiqueta.back() == '+' || etiqueta.back() == '-' || isspace((unsigned char)etiqueta.back()))) {
+        etiqueta.pop_back();
+    }
+    limpiar_linea(etiqueta);
+    if (etiqueta.empty()) return false; // se esperaba etiqueta
+
+    // Buscar desplazamiento (opcional) que viene DESPUÉS de "ESI*4"
+    int64_t displacement = 0;
+    bool tiene_disp = false;
+    size_t pos_after = pos_esi + string("ESI*4").size();
+    if (pos_after < op.size()) {
+        // Debe comenzar con '+' o '-'
+        string tail = op.substr(pos_after);
+        limpiar_linea(tail);
+        if (!tail.empty()) {
+            // extraer número con posible signo
+            try {
+                // stoi acepta signo al inicio
+                displacement = stoi(tail);
+                tiene_disp = true;
+            } catch (...) {
+                // No es un desplazamiento válido -> no reconocido
+                return false;
+            }
+        }
     }
 
-    // --- 2. Determinación de Desplazamiento (Disp8) ---
-    uint8_t disp8 = 0;
-    
-    // Asumimos que la limpieza eliminó el espacio: buscamos "+4" (ej. ARRAY+ESI*4+4)
-    if (op.find("+4") != string::npos) { 
-        disp8 = 4;
-    }
-    
-    // --- 3. Codificación ModR/M y SIB ---
-    
-    // ModR/M: Determina el modo de direccionamiento y el registro.
-    // MOD: 0b00 (si disp8=0) o 0b01 (si disp8=4).
-    // R/M: 0b100 (Indica que el siguiente byte es SIB).
-    uint8_t mod = disp8 == 0 ? 0b00 : 0b01; 
-    uint8_t rm = 0b100; 
-    uint8_t reg_field = reg_code; 
+    // Determinamos MOD y tamaño de desplazamiento final
+    uint8_t mod = 0b00;
+    int disp_size = 0; // 0,1,4
+    if (tiene_disp) {
+        if (displacement >= -128 && displacement <= 127) {
+            mod = 0b01; // disp8
+            disp_size = 1;
+        } else {
+            mod = 0b10; // disp32
+            disp_size = 4;
+        }
+    } else {
 
+        mod = 0b00;
+        disp_size = 0; 
+    }
+
+    // Campos SIB:
+    // scale = 10 (x4)
+    // index = ESI (110)
+    // base  = ? (si MOD=00 y queremos direccion absoluta por SIB -> base=101)
+    uint8_t scale = 0b10;
+    uint8_t index = 0b110; // ESI
+    uint8_t base;
+
+    // Si MOD=00 y no hay desplazamiento proporcionado por usuario, debemos usar base=101 (disp32)
+    // para referenciar la etiqueta (ARRAY) a través de disp32 (porque en esta forma el addressing es: [disp32 + index*scale])
+    if (mod == 0b00) {
+        base = 0b101; // indica que después del SIB viene disp32 (la dirección base)
+        // En este caso necesitamos emitir disp32 (la referencia a la etiqueta)
+        disp_size = 4;
+    } else {
+       
+        base = 0b101;
+    }
+
+    // R/M = 100 (indica SIB follows)
+    uint8_t rm = 0b100;
+    uint8_t reg_field = reg_code; // el campo REG lo entrega el llamador
+
+    // Construir ModR/M byte (se devolverá y además lo escribiremos en el stream)
     modrm_byte = generar_modrm(mod, reg_field, rm);
 
+    // ---- Escribir en el orden correcto: ModR/M, SIB, Disp ----
+    agregar_byte(modrm_byte); // escribir ModR/M ahora
 
-    // SIB Byte: Define Index, Scale y Base.
-    // SCALE: 0b10 (x4)
-    // INDEX: 0b110 (ESI)
-    // BASE: 0b101 (Indica que el desplazamiento es directo, usando disp32 para la dirección de la etiqueta)
-    // SIB = 10 110 101 = 0xB5
-    uint8_t scale = 0b10; 
-    uint8_t index = 0b110; 
-    uint8_t base = 0b101; 
     uint8_t sib_byte = (scale << 6) | (index << 3) | base;
-    agregar_byte(sib_byte); 
+    agregar_byte(sib_byte);
 
-    // --- 4. Agregar Desplazamiento (Disp8) ---
-    // Si MOD es 0b01 (desplazamiento de 8 bits), agregamos el disp8.
-    if (mod == 0b01) {
-        agregar_byte(disp8); 
-    } 
-    
-    // --- 5. Referencia Pendiente (Disp32 para la dirección base de ARRAY) ---
-    if (mod == 0b00) { 
-    string etiqueta = "ARRAY"; 
+    // Si disp_size == 1 => emitimos disp8 (valor inmediato)
+    if (disp_size == 1) {
+        agregar_byte(static_cast<uint8_t>(displacement & 0xFF));
+    }
+    // Si disp_size == 4 => puede ser:
+    //  - referencia a etiqueta (ARRAY) -> debemos dejar placeholder y registrar referencia pendiente
+    //  - o un desplazamiento inmediato grande -> emitimos dword
+    else if (disp_size == 4) {
+        // Si no había desplazamiento explícito (tiene_disp == false), se trata de la etiqueta ARRAY (referencia)
+        if (!tiene_disp) {
+            // Registramos la referencia pendiente para la etiqueta
+            ReferenciaPendiente ref;
+            ref.posicion = contador_posicion;  // posición donde comienza el dword placeholder
+            ref.tamano_inmediato = 4;
+            ref.tipo_salto = 0; // absoluto (dirección)
+            referencias_pendientes[etiqueta].push_back(ref);
 
-    ReferenciaPendiente ref;
-    ref.posicion = contador_posicion;
-    ref.tamano_inmediato = 4;
-    ref.tipo_salto = 0; // absoluto
-    referencias_pendientes[etiqueta].push_back(ref);
-
-    agregar_dword(0);   // placeholder para Disp32 (4 bytes)
+            agregar_dword(0); // placeholder disp32 que será parcheado luego
+        } else {
+            // Tenemos un desplazamiento explícito de 32 bits: escribirlo como little-endian
+            agregar_dword(static_cast<uint32_t>(displacement));
+        }
+    }
+    return true;
 }
-    
-    return true; // Éxito en el parseo SIB
-}
+
 
 bool EnsambladorIA32::obtener_inmediato32(const string& str, uint32_t& immediate) {
     string temp_str = str;
@@ -482,7 +537,6 @@ void EnsambladorIA32::procesar_binaria(
         
         // Intentar SIB
         if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) {
-            agregar_byte(modrm_byte); 
             return;
         }
 
@@ -508,7 +562,6 @@ void EnsambladorIA32::procesar_binaria(
         
         // Intentar SIB
         if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) {
-            agregar_byte(modrm_byte); 
             return;
         }
         
@@ -541,8 +594,7 @@ void EnsambladorIA32::procesar_binaria(
             }
             
             // Intentar SIB
-            if (procesar_mem_sib(dest_str, modrm_byte, reg_field_extension, true)) {
-                agregar_byte(modrm_byte);
+           if (procesar_mem_sib(dest_str, modrm_byte, reg_field_extension, true)) {
                 if (use_imm8) { agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); } 
                 else { agregar_dword(immediate); }
                 return;
@@ -996,9 +1048,9 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         
         // La memoria es el DESTINO, el registro es la FUENTE (va en el campo REG)
         if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) {
-            agregar_byte(modrm_byte); 
             return;
         }
+
         if (procesar_mem_disp(dest_str, modrm_byte, src_code, true)) {
             agregar_byte(modrm_byte); 
             return;
@@ -1017,7 +1069,6 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         // La memoria es la FUENTE, el registro es el DESTINO (va en el campo REG)
         // 1. Intentar SIB
         if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) {
-            agregar_byte(modrm_byte); 
             return;
         }
         
@@ -1042,7 +1093,6 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         // El campo REG debe ser 0b000 (/0)
         // La memoria es el DESTINO
         if (procesar_mem_sib(dest_str, modrm_byte, 0b000, true)) {
-            agregar_byte(modrm_byte); 
             agregar_dword(immediate);
             return;
         }
@@ -1150,11 +1200,8 @@ bool EnsambladorIA32::procesar_mem_disp(const string& operando,
         // Disp32
         agregar_dword(static_cast<uint32_t>(displacement));
     }
-    
-    // Nota: Si el R/M fuera ESP (0b100), se requeriría un byte SIB extra.
-    // Dado que estás usando esta función para "disp", asumimos que no es SIB.
 
-    return true; // Éxito en el parseo
+    return true; 
 }
 
 void EnsambladorIA32::procesar_movzx(const string& operandos) {
@@ -1394,6 +1441,7 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
 
 
