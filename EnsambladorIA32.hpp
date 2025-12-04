@@ -55,23 +55,54 @@ private:
                           uint8_t reg_field_extension);
 
     // Declaraciones de procesamiento de instrucciones
-    void procesar_mov(const string& operandos);
+        void procesar_mov(const string& operandos);
     void procesar_add(const string& operandos);
     void procesar_sub(const string& operandos);
-    void procesar_cmp(const string& operandos); // ¡NUEVO!
+    void procesar_cmp(const string& operandos);
+    void procesar_imul(const string& operandos);
+    void procesar_inc(const string& operandos);
+    void procesar_dec(const string& operandos);
+    void procesar_mul(const string& operandos);
+    void procesar_div(const string& operandos);
+    void procesar_idiv(const string& operandos);
+    void procesar_xor(const string& operandos);
+    void procesar_and(const string& operandos);
+    void procesar_or(const string& operandos);
+    void procesar_test(const string& operandos);
+    void procesar_movzx(const string& operandos);
+    void procesar_xchg(const string& operandos);
+    void procesar_lea(const string& operandos);
+    void procesar_call(string operandos);
+    void procesar_ret();
+    void procesar_push(const string& operandos);
+    void procesar_pop(const string& operandos);
+    void procesar_loop(string operandos);
+    void procesar_nop();
     void procesar_jmp(string operandos); 
     void procesar_condicional(const string& mnem, string operandos); 
+    void procesar_leave();
 
     // --- UTILIDADES DE CODIFICACIÓN ---
     uint8_t generar_modrm(uint8_t mod, uint8_t reg, uint8_t rm);
     void agregar_byte(uint8_t byte);
     void agregar_dword(uint32_t dword);
     bool obtener_reg32(const string& op, uint8_t& reg_code);
+    bool obtener_reg8(const string& op, uint8_t& reg_code);   // ⬅ nuevo
     bool procesar_mem_simple(const string& operando,
                              uint8_t& modrm_byte,
                              const uint8_t reg_code,
                              bool es_destino,
                              uint8_t op_extension = 0);
+
+    bool procesar_mem_sib(const string& operando,
+                          uint8_t& modrm_byte,
+                          const uint8_t reg_code,
+                          bool es_destino);
+                          
+    bool procesar_mem_disp(const string& operando,
+                           uint8_t& modrm_byte,
+                           const uint8_t reg_code,
+                           bool es_destino);
 
 public:
     EnsambladorIA32();
