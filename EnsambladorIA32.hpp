@@ -39,7 +39,8 @@ private:
     // --- NUEVAS UTILIDADES DE PARSEO ---
     bool separar_operandos(const string& linea_operandos, string& dest_str, string& src_str);
     bool obtener_inmediato32(const string& str, uint32_t& immediate);
-    // ------------------------------------
+
+    bool is_mem_simple_label(const string& s);
 
     void procesar_linea(string linea);
     void procesar_etiqueta(const string& etiqueta);
@@ -55,7 +56,7 @@ private:
                           uint8_t reg_field_extension);
 
     // Declaraciones de procesamiento de instrucciones
-        void procesar_mov(const string& operandos);
+    void procesar_mov(const string& operandos);
     void procesar_add(const string& operandos);
     void procesar_sub(const string& operandos);
     void procesar_cmp(const string& operandos);
@@ -87,7 +88,7 @@ private:
     void agregar_byte(uint8_t byte);
     void agregar_dword(uint32_t dword);
     bool obtener_reg32(const string& op, uint8_t& reg_code);
-    bool obtener_reg8(const string& op, uint8_t& reg_code);   // ⬅ nuevo
+    bool obtener_reg8(const string& op, uint8_t& reg_code);   
     bool procesar_mem_simple(const string& operando,
                              uint8_t& modrm_byte,
                              const uint8_t reg_code,
@@ -114,5 +115,6 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
+
 
 
