@@ -55,7 +55,7 @@ private:
                           uint8_t reg_field_extension);
 
     // Declaraciones de procesamiento de instrucciones
-    void procesar_mov(const string& operandos);
+        void procesar_mov(const string& operandos);
     void procesar_add(const string& operandos);
     void procesar_sub(const string& operandos);
     void procesar_cmp(const string& operandos);
@@ -78,8 +78,8 @@ private:
     void procesar_pop(const string& operandos);
     void procesar_loop(string operandos);
     void procesar_nop();
-    void procesar_jmp(string operandos); 
-    void procesar_condicional(const string& mnem, string operandos); 
+    void procesar_jmp(const string& operandos_in); 
+    void procesar_condicional(const string& mnem, const string& operandos); 
     void procesar_leave();
 
     // --- UTILIDADES DE CODIFICACIÓN ---
@@ -114,6 +114,5 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
-
 
 
