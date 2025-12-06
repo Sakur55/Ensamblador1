@@ -100,11 +100,11 @@ bool EnsambladorIA32::procesar_mem_sib(const string& operando,
     // Quitar corchetes
     op = op.substr(1, op.size() - 2);
 
-    // Quitar TODOS los espacios internos:
-    // "ARRAY + ESI*4 + 4" -> "ARRAY+ESI*4+4"
+   // Limpiar espacios internos y externos
+    limpiar_linea(op);
     op.erase(
         remove_if(op.begin(), op.end(),
-                  [](unsigned char c){ return isspace(c); }),
+                [](unsigned char c){ return isspace(c); }),
         op.end()
     );
 
@@ -121,6 +121,7 @@ bool EnsambladorIA32::procesar_mem_sib(const string& operando,
     // Si termina en '+', se lo quitamos: "ARRAY+" -> "ARRAY"
     if (!etiqueta.empty() && etiqueta.back() == '+')
         etiqueta.pop_back();
+    limpiar_linea(etiqueta); //Cambio
 
     // Si por alguna razón quedó vacía, no es un patrón válido
     if (etiqueta.empty())
@@ -204,7 +205,7 @@ bool EnsambladorIA32::obtener_inmediato32(const string& str, uint32_t& immediate
         base = 16;
     }
     // Manejar prefijo 0X (C/C++ style: 0X80)
-    else if (temp_str.size() > 2 && temp_str.substr(0, 2) == "0X") {
+    else if (temp_str.size() > 2 && (temp_str.substr(0, 2) == "0X")) {
         temp_str = temp_str.substr(2); // Eliminar "0X"
         base = 16;
     }
@@ -431,10 +432,6 @@ void EnsambladorIA32::procesar_instruccion(const string& linea) {
     }
 }
 
-// -----------------------------------------------------------------------------
-// MOV 
-// -----------------------------------------------------------------------------
-
 
 // -----------------------------------------------------------------------------
 // ADD, SUB, CMP (generalizado)
@@ -454,9 +451,14 @@ void EnsambladorIA32::procesar_binaria(
         return;
     }
 
-    uint8_t dest_code, src_code;
+    uint8_t dest_code = 0, src_code = 0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg = obtener_reg32(src_str, src_code);
+    uint32_t immediate = 0;
+    bool src_is_imm = obtener_inmediato32(src_str, immediate);
+
+    bool dest_is_mem = (!dest_is_reg && ! (dest_str.empty() && obtener_inmediato32(dest_str, immediate)) && dest_str.size()>=2 && dest_str.front()=='[' && dest_str.back()==']');
+    bool src_is_mem = (!src_is_reg && !src_is_imm && src_str.size()>=2 && src_str.front()=='[' && src_str.back()==']');
     
     // 1. REG, REG (r/m32, r32)
     if (dest_is_reg && src_is_reg) {
@@ -466,9 +468,6 @@ void EnsambladorIA32::procesar_binaria(
         return;
     }
 
-    uint32_t immediate;
-    bool src_is_imm = obtener_inmediato32(src_str, immediate);
-
     // 2. EAX, INMEDIATO (opcode dedicado)
     if (dest_is_reg && dest_code == 0b000 && src_is_imm) { // EAX, imm
         agregar_byte(opcode_eax_imm); // ej: 0x05 para ADD, 0x2D para SUB
@@ -476,49 +475,48 @@ void EnsambladorIA32::procesar_binaria(
         return;
     }
 
-    // Usaremos procesar_mem_simple para [ETIQUETA]
-
     // 3. REG, [ETIQUETA] (r32, r/m32)
-    if (dest_is_reg && !src_is_imm) { // <--- CAMBIO AQUÍ: ¡Si la fuente NO es inmediato!
+    if (dest_is_reg && !src_is_imm) { 
         agregar_byte(opcode_reg_rm); // ej: 0x03 para ADD, 0x2B para SUB, 0x3B para CMP
         uint8_t modrm_byte;
         // es_destino=false porque la memoria es la fuente (ModR/M usa REG=dest_code)
-        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
         if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) return;
+        if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) return;
+        if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
     }
     
     // 4. [ETIQUETA], REG (r/m32, r32)
-    if (src_is_reg && !src_is_imm) { // <--- CAMBIO AQUÍ: ¡Si la fuente NO es inmediato!
+    if (src_is_reg && !src_is_imm) { 
         agregar_byte(opcode_rm_reg); // ej: 0x01 para ADD, 0x29 para SUB, 0x39 para CMP
         uint8_t modrm_byte;
         // es_destino=true porque la memoria es el destino (ModR/M usa REG=src_code)
-        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
         if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) return;
+        if (procesar_mem_disp(dest_str, modrm_byte, src_code, true)) return;
+        if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
     }
 
     // 5. [ETIQUETA], INMEDIATO (81 /extension, imm32)
     // Usaremos la versión IMM8 (0x83 /extension, imm8) si cabe, ya que el proyecto incluye ejemplos con imm8.
-    if (src_is_imm) {
+    if (src_is_imm && dest_is_mem) {
         uint8_t opcode = opcode_imm_general; // ej: 0x81
-        bool use_imm8 = (immediate <= 0xFF && immediate >= 0) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF); // Si cabe en 8 bits con extensión de signo
-        
+        bool use_imm8 = (immediate <= 0xFF) || (immediate >= 0xFFFFFF80 && immediate <= 0xFFFFFFFF); // Si cabe en 8 bits con extensión de signo
         if (use_imm8) opcode = 0x83; // Opcode 0x83 para imm8 sign-extended
-
-        if (!dest_is_reg) { // Memoria, imm
-            agregar_byte(opcode);
-            uint8_t modrm_byte;
-            // El campo REG usa la extensión del opcode, R/M apunta a la memoria
-            if (procesar_mem_simple(dest_str, modrm_byte, reg_field_extension, true)) { 
-                if (use_imm8) {
-                    agregar_byte(static_cast<uint8_t>(immediate & 0xFF));
-                } else {
-                    agregar_dword(immediate);
-                }
-                return;
-            }
+        
+        agregar_byte(opcode);
+        uint8_t modrm_byte;
+        if (procesar_mem_sib(dest_str, modrm_byte, reg_field_extension, true)) {
+            if (use_imm8) agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); else agregar_dword(immediate);
+            return;
         }
-    }
-    
+        if (procesar_mem_disp(dest_str, modrm_byte, reg_field_extension, true)) {
+            if (use_imm8) agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); else agregar_dword(immediate);
+            return;
+        }
+        if (procesar_mem_simple(dest_str, modrm_byte, reg_field_extension, true)) {
+            if (use_imm8) agregar_byte(static_cast<uint8_t>(immediate & 0xFF)); else agregar_dword(immediate);
+            return;
+        }
+    } 
     // 6. REG, INMEDIATO (81 /extension, imm32) - Si no es EAX (ya manejado)
     if (dest_is_reg && dest_code != 0b000 && src_is_imm) {
         uint8_t opcode = opcode_imm_general; // ej: 0x81
@@ -541,7 +539,7 @@ void EnsambladorIA32::procesar_binaria(
     cerr << "Error de sintaxis o modo no soportado para " << mnem << ": " << operandos << endl;
 }
 // -----------------------------------------------------------------------------
-// ADD, SUB, CMP (usando el generalizado)
+// ADD, SUB, CMP, IMUL (usando el generalizado)
 // -----------------------------------------------------------------------------
 void EnsambladorIA32::procesar_add(const string& operandos) {
     // 0x01: ADD r/m32, r32; 0x03: ADD r32, r/m32; 0x05: ADD EAX, imm32
@@ -568,7 +566,7 @@ void EnsambladorIA32::procesar_imul(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code, src_code;
+    uint8_t dest_code = 0, src_code = 0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg  = obtener_reg32(src_str, src_code);
 
@@ -582,7 +580,6 @@ void EnsambladorIA32::procesar_imul(const string& operandos) {
         return;
     }
 
-    // Podrías extender a memoria más adelante
     cerr << "Error de sintaxis o modo no soportado para IMUL: " << operandos << endl;
 }
 
@@ -642,14 +639,12 @@ void EnsambladorIA32::procesar_push(const string& operandos) {
     // Intentar Base + Desplazamiento
     if (procesar_mem_disp(op, modrm_byte, ext_opcode, false)) { 
         agregar_byte(0xFF); // Opcode FF
-        // procesar_mem_disp ya agregó el ModR/M y el Disp8/32
         return;
     }
     
     // Intentar Memoria Simple [ETIQUETA]
     if (procesar_mem_simple(op, modrm_byte, ext_opcode, false)) {
         agregar_byte(0xFF); // Opcode FF
-        // procesar_mem_simple ya agregó ModR/M y el Disp32
         return;
     }
     
@@ -731,6 +726,9 @@ bool EnsambladorIA32::procesar_mem_simple(const std::string& operando,
 
     // Quitamos los corchetes
     op = op.substr(1, op.size() - 2); 
+
+    //Trim y limpiar
+    limpiar_linea(op);
 
     // Aquí asumimos direccionamiento absoluto [ETIQUETA]
     std::string etiqueta = op;
@@ -1226,14 +1224,10 @@ void EnsambladorIA32::resolver_referencias_pendientes() {
             uint32_t valor_a_parchear = 0;
 
             if (ref.tipo_salto == 0) {
-                uint32_t placeholder =
-                    static_cast<uint32_t>(codigo_hex[pos]) |
-                    (static_cast<uint32_t>(codigo_hex[pos + 1]) << 8) |
-                    (static_cast<uint32_t>(codigo_hex[pos + 2]) << 16) |
-                    (static_cast<uint32_t>(codigo_hex[pos + 3]) << 24);
-
-                valor_a_parchear = static_cast<uint32_t>(destino) + placeholder;
+                // Referencia absoluta → dirección real de la etiqueta
+                valor_a_parchear = static_cast<uint32_t>(destino);
             } else {
+                // Relativo → destino - (posición del siguiente byte)
                 int offset = destino - (pos + ref.tamano_inmediato);
                 valor_a_parchear = static_cast<uint32_t>(offset);
             }
@@ -1249,7 +1243,6 @@ void EnsambladorIA32::resolver_referencias_pendientes() {
         }
     }
 }
-
 
 // -----------------------------------------------------------------------------
 // Ensamblado y generación de archivos
@@ -1336,3 +1329,4 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
