@@ -758,37 +758,47 @@ bool EnsambladorIA32::procesar_mem_simple(const std::string& operando,
 // Saltos
 // -----------------------------------------------------------------------------
 
-// En el .hpp asegúrate:
-// void procesar_jmp(const string& operandos);
-
 void EnsambladorIA32::procesar_jmp(const string& operandos_in) {
     string operandos = operandos_in;
     limpiar_linea(operandos);
     string etiqueta = operandos;
 
-    // Usamos salto corto: JMP rel8 → EB disp8
-    agregar_byte(0xEB);
-    int pos_disp = contador_posicion;   // aquí va el byte de desplazamiento (rel8)
-
+   // Si la etiqueta ya está definida podemos elegir salto corto o cercano
     if (tabla_simbolos.count(etiqueta)) {
         int destino = tabla_simbolos[etiqueta];
-        // offset = destino - (PC después del disp8)
-        int offset = destino - (pos_disp + 1);
-        agregar_byte(static_cast<uint8_t>(offset & 0xFF));
+        // calculamos offset relativo respecto al byte siguiente
+        int pos_disp = contador_posicion + 1; // si usamos EB/dispb
+        int offset = destino - pos_disp;
+        if (offset >= -128 && offset <= 127) {
+            agregar_byte(0xEB);
+            agregar_byte(static_cast<uint8_t>(offset & 0xFF));
+            return;
     } else {
-        // Pendiente: rel8
+       // usar near jump E9 rel32
+        agregar_byte(0xE9);
+        int posicion_referencia = contador_posicion;
         ReferenciaPendiente ref;
-        ref.posicion = pos_disp;        // byte del disp8
-        ref.tamano_inmediato = 1;
-        ref.tipo_salto = 1;             // relativo
+        ref.posicion = posicion_referencia;
+        ref.tamano_inmediato = 4;
+        ref.tipo_salto = 1; // relativo
         referencias_pendientes[etiqueta].push_back(ref);
-
-        agregar_byte(0x00);             // placeholder
-    }
+        agregar_dword(0);
+        return;
+        }
+     }
+    // Si la etiqueta no existe aún, emitimos salto corto por defecto y referencia pendiente
+    // (se podría mejorar para elegir rel32 cuando se necesite)
+    agregar_byte(0xEB);
+    int pos_disp = contador_posicion;
+    
+    ReferenciaPendiente ref;
+    ref.posicion = pos_disp; // byte del disp8
+    ref.tamano_inmediato = 1;
+    ref.tipo_salto = 1; // relativo
+    referencias_pendientes[etiqueta].push_back(ref);
+    
+    agregar_byte(0x00); // placeholder
 }
-
-// En el .hpp:
-// void procesar_condicional(const string& mnem, const string& operandos);
 
 void EnsambladorIA32::procesar_condicional(const string& mnem,
                                            const string& operandos_in) {
@@ -797,39 +807,57 @@ void EnsambladorIA32::procesar_condicional(const string& mnem,
     string etiqueta = operandos;
 
     uint8_t opcode;
+    uint8_t opcode_ext = 0;
+    bool uses_two_byte = false;
 
     // Mapeo a saltos cortos (rel8)
-    if (mnem == "JE"  || mnem == "JZ")  opcode = 0x74;
-    else if (mnem == "JNE" || mnem == "JNZ") opcode = 0x75;
-    else if (mnem == "JLE") opcode = 0x7E;
-    else if (mnem == "JL")  opcode = 0x7C;
-    else if (mnem == "JA")  opcode = 0x77;
-    else if (mnem == "JAE") opcode = 0x73;
-    else if (mnem == "JB")  opcode = 0x72;
-    else if (mnem == "JBE") opcode = 0x76;
-    else if (mnem == "JG")  opcode = 0x7F;
-    else if (mnem == "JGE") opcode = 0x7D;
+    if (mnem == "JE" || mnem == "JZ") opcode = 0x74, opcode_ext = 0x84, uses_two_byte = true;
+    else if (mnem == "JNE" || mnem == "JNZ") opcode = 0x75, opcode_ext = 0x85, uses_two_byte = true;
+    else if (mnem == "JLE") opcode = 0x7E, opcode_ext = 0x8E, uses_two_byte = true;
+    else if (mnem == "JL") opcode = 0x7C, opcode_ext = 0x8C, uses_two_byte = true;
+    else if (mnem == "JA") opcode = 0x77, opcode_ext = 0x87, uses_two_byte = true;
+    else if (mnem == "JAE") opcode = 0x73, opcode_ext = 0x83, uses_two_byte = true;
+    else if (mnem == "JB") opcode = 0x72, opcode_ext = 0x82, uses_two_byte = true;
+    else if (mnem == "JBE") opcode = 0x76, opcode_ext = 0x86, uses_two_byte = true;
+    else if (mnem == "JG") opcode = 0x7F, opcode_ext = 0x8F, uses_two_byte = true;
+    else if (mnem == "JGE") opcode = 0x7D, opcode_ext = 0x8D, uses_two_byte = true;
     else {
         cerr << "Error: Mnemónico condicional no soportado: " << mnem << endl;
         return;
     }
 
-    agregar_byte(opcode);              // Jcc rel8
-    int pos_disp = contador_posicion;  // aquí va el disp8
-
     if (tabla_simbolos.count(etiqueta)) {
         int destino = tabla_simbolos[etiqueta];
-        int offset = destino - (pos_disp + 1); // PC después del disp8
-        agregar_byte(static_cast<uint8_t>(offset & 0xFF));
-    } else {
-        ReferenciaPendiente ref;
-        ref.posicion = pos_disp;
-        ref.tamano_inmediato = 1;      // rel8
-        ref.tipo_salto = 1;            // relativo
-        referencias_pendientes[etiqueta].push_back(ref);
+        int pos_disp = contador_posicion + 1; // si emitimos short
+        int offset = destino - pos_disp;
+        if (offset >= -128 && offset <= 127) {
+            agregar_byte(opcode);
+            agregar_byte(static_cast<uint8_t>(offset & 0xFF));
+            return;
+      } else if (uses_two_byte) {
+            // emitir opcode 0F 8x + rel32
+            agregar_byte(0x0F);
+            agregar_byte(opcode_ext);
+            int posicion_referencia = contador_posicion;
+            ReferenciaPendiente ref;
+            ref.posicion = posicion_referencia;
+            ref.tamano_inmediato = 4;
+            ref.tipo_salto = 1; // relativo
+            referencias_pendientes[etiqueta].push_back(ref);
+            agregar_dword(0);
+            return;
+        }
+    }  
 
-        agregar_byte(0x00);            // placeholder
-    }
+    // Si etiqueta no está definida, emitimos versión corta y referencia rel8 pendiente
+    agregar_byte(opcode);
+    int pos_disp = contador_posicion;
+    ReferenciaPendiente ref;
+    ref.posicion = pos_disp;
+    ref.tamano_inmediato = 1; // rel8
+    ref.tipo_salto = 1; // relativo
+    referencias_pendientes[etiqueta].push_back(ref);
+    agregar_byte(0x00); // placeholder
 }
 
 
@@ -837,7 +865,7 @@ void EnsambladorIA32::procesar_mul(const string& operandos) {
     string op = operandos;
     limpiar_linea(op);
 
-    uint8_t reg_code;
+    uint8_t reg_code=0;
     if (obtener_reg32(op, reg_code)) {
         // MUL r32  -> F7 /4  con MOD=11, REG=100b, R/M=reg
         agregar_byte(0xF7);
@@ -860,7 +888,7 @@ void EnsambladorIA32::procesar_div(const string& operandos) {
     string op = operandos;
     limpiar_linea(op);
 
-    uint8_t reg_code;
+    uint8_t reg_code=0;
     if (obtener_reg32(op, reg_code)) {
         // DIV r32 -> F7 /6
         agregar_byte(0xF7);
@@ -882,7 +910,7 @@ void EnsambladorIA32::procesar_idiv(const string& operandos) {
     string op = operandos;
     limpiar_linea(op);
 
-    uint8_t reg_code;
+    uint8_t reg_code=0;
     if (obtener_reg32(op, reg_code)) {
         // IDIV r32 -> F7 /7
         agregar_byte(0xF7);
@@ -922,7 +950,7 @@ void EnsambladorIA32::procesar_test(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code, src_code;
+    uint8_t dest_code=0, src_code=0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg  = obtener_reg32(src_str, src_code);
 
@@ -937,6 +965,26 @@ void EnsambladorIA32::procesar_test(const string& operandos) {
     cerr << "Error de sintaxis o modo no soportado para TEST: " << operandos << endl;
 }
 
+bool EnsambladorIA32::is_mem_simple_label(const string& s) {
+    // Detecta [LABEL] sencillo sin registros, sin '+', '-', '*', ni constantes
+    if (s.size() < 3 || s.front() != '[' || s.back() != ']') return false;
+    string inner = s.substr(1, s.size()-2);
+    limpiar_linea(inner);
+    // si contiene cualquiera de estos símbolos, no es "simple"
+    string forbidden = "+-*[]";
+    for (char c: forbidden) if (inner.find(c) != string::npos) return false;
+    // si contiene nombres de registros, tampoco
+    for (auto &par: reg32_map) {
+    if (inner.find(par.first) != string::npos) return false;
+    }
+    for (auto &par: reg8_map) {
+    if (inner.find(par.first) != string::npos) return false;
+    }
+    // si solo está compuesto por letras, dígitos o '_' lo permitimos
+    // (aceptamos etiquetas alfanuméricas)
+    return true;
+}
+
 void EnsambladorIA32::procesar_mov(const string& operandos) {
     string dest_str, src_str;
     if (!separar_operandos(operandos, dest_str, src_str)) {
@@ -944,7 +992,7 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code, src_code;
+    uint8_t dest_code=0, src_code=0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg = obtener_reg32(src_str, src_code);
     
@@ -956,7 +1004,7 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         return;
     }
 
-    uint32_t immediate;
+    uint32_t immediate=0;
     bool src_is_imm = obtener_inmediato32(src_str, immediate);
 
     // 2. MOV REG, INMEDIATO (B8+rd)
@@ -973,36 +1021,28 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         return;
     }
 
-    // 2.5. MOV [ETIQUETA], EAX (Opcode A3) - Simplificado
-    if (src_is_reg && src_code == 0b000) { 
-        string etiqueta_mem;
-        if (dest_str.front() == '[' && dest_str.back() == ']') {
-             string temp_op = dest_str.substr(1, dest_str.size() - 2);
-             // Evitar A3 si parece ser SIB o inmediato (solo para etiquetas simples)
-             if (obtener_inmediato32(temp_op, immediate) || temp_op.find("ESI") != string::npos) {
-                 // No usar A3
-             } else {
-                agregar_byte(0xA3); 
-                etiqueta_mem = temp_op; 
-
-                ReferenciaPendiente ref;
-                ref.posicion = contador_posicion;
-                ref.tamano_inmediato = 4;
-                ref.tipo_salto = 0;
-                referencias_pendientes[etiqueta_mem].push_back(ref);
-
-                agregar_dword(0); 
-                return;
-             }
-        }
+    // 2.5. MOV [ETIQUETA], EAX (Opcode A3) - Usaremos SOLO para [LABEL] simple
+   if (src_is_reg && src_code == 0b000 && is_mem_simple_label(dest_str)) {
+        string temp_op = dest_str.substr(1, dest_str.size() - 2);
+        agregar_byte(0xA3);
+        
+        ReferenciaPendiente ref;
+        ref.posicion = contador_posicion;
+        ref.tamano_inmediato = 4;
+        ref.tipo_salto = 0;
+        referencias_pendientes[temp_op].push_back(ref);
+        
+        agregar_dword(0);
+        return;
     }
-
+    
     // 3. MOV [MEM], REG (89 r/m32, r32). MEMORIA ES DESTINO.
     if (src_is_reg) {
         agregar_byte(0x89); 
         uint8_t modrm_byte;
         
         if (procesar_mem_sib(dest_str, modrm_byte, src_code, true)) return;
+        if (procesar_mem_disp(dest_str, modrm_byte, src_code, true)) return;
         if (procesar_mem_simple(dest_str, modrm_byte, src_code, true)) return;
     }
 
@@ -1011,13 +1051,8 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
         agregar_byte(0x8B); // Opcode 8B
         uint8_t modrm_byte;
         
-        // 1. Intentar SIB
         if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) return;
-        
-        // 2. Intentar Base + Desplazamiento [EBP+disp] <--- ¡NUEVO!
         if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) return;
-        
-        // 3. Intentar Memoria Simple
         if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) return;
     }
     
@@ -1031,6 +1066,11 @@ void EnsambladorIA32::procesar_mov(const string& operandos) {
              return;
         }
 
+        if (procesar_mem_disp(dest_str, modrm_byte, 0b000, true)) {
+            agregar_dword(immediate);
+            return;
+        }
+        
         if (procesar_mem_simple(dest_str, modrm_byte, 0b000, true)) {
              agregar_dword(immediate);
              return;
@@ -1052,6 +1092,7 @@ bool EnsambladorIA32::procesar_mem_disp(const string& operando,
     if (op.front() != '[' || op.back() != ']') return false;
 
     op = op.substr(1, op.size() - 2); // Remueve corchetes
+    limpiar_linea(op);
     
     // Simplificación: Solo buscamos EBP (o un registro de 32 bits y un desplazamiento)
     if (op.find("EBP") == string::npos) return false;
@@ -1066,42 +1107,37 @@ bool EnsambladorIA32::procesar_mem_disp(const string& operando,
     if (sign_pos == string::npos) sign_pos = op.find('-');
     
     if (sign_pos != string::npos) {
-        // La parte restante es el desplazamiento (ej: "+8" o "8")
-        string disp_str = op.substr(sign_pos); 
-        
-        // Limpiar espacios en la parte del número (si existen)
-        stringstream ss(disp_str);
-        ss >> displacement; // Esto maneja "+8", "-12", etc.
-    }
-
-    
-    // Extracción simplificada del desplazamiento (ej: "+8", "+20").
-    // Buscamos el signo '+' o '-' y parseamos el resto.
-    
-    if (sign_pos != string::npos) {
-        string disp_str = op.substr(sign_pos); // Ej: "+8"
         try {
-            // stoul lo maneja como unsigned, stoi lo maneja como signed (más seguro aquí)
-            displacement = stoi(disp_str); 
+            displacement = stoi(op.substr(sign_pos));
         } catch(...) {
             return false;
         }
-    } 
-    
-    // Para desplazamientos de 8, 12, 16, 20 bytes (caben en 8 bits sign-extended)
-    // Usaremos Mod=01 (disp8) si el desplazamiento cabe en un byte.
-    uint8_t mod = 0b01; // Usamos 0b01 (disp8)
-    uint8_t rm = base_code; // R/M = EBP (101)
-    uint8_t reg_field = reg_code; 
-    
-    modrm_byte = generar_modrm(mod, reg_field, rm);
-    agregar_byte(modrm_byte); 
-    
-    // Agregar el desplazamiento de 8 bits
-    if (mod == 0b01) {
-        agregar_byte(static_cast<uint8_t>(displacement & 0xFF));
     }
     
+    // Elegir MOD según tamaño del desplazamiento
+    uint8_t mod;
+    if (displacement == 0) {
+        // Para [EBP] el encodado MOD=00 con R/M=101 significa disp32
+        // Para representar [EBP] sin disp se usa MOD=01 con disp8=0
+        mod = 0b01;
+    } else if (displacement >= -128 && displacement <= 127) {
+        mod = 0b01; // disp8
+    } else {
+        mod = 0b10; // disp32
+    }
+
+
+    uint8_t rm = base_code; // R/M = EBP (101)
+    uint8_t reg_field = reg_code;
+    
+    modrm_byte = generar_modrm(mod, reg_field, rm);
+    agregar_byte(modrm_byte);
+    
+    if (mod == 0b01) {
+        agregar_byte(static_cast<uint8_t>(displacement & 0xFF));
+    } else if (mod == 0b10) {
+        agregar_dword(static_cast<uint32_t>(displacement));
+    }
     return true;
 }
 
@@ -1112,7 +1148,7 @@ void EnsambladorIA32::procesar_movzx(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code, src_code8;
+    uint8_t dest_code=0, src_code8=0;
     bool dest_is_reg32 = obtener_reg32(dest_str, dest_code);
     bool src_is_reg8   = obtener_reg8(src_str, src_code8);
 
@@ -1162,7 +1198,7 @@ void EnsambladorIA32::procesar_xchg(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code, src_code;
+    uint8_t dest_code=0, src_code=0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     bool src_is_reg  = obtener_reg32(src_str, src_code);
 
@@ -1184,7 +1220,7 @@ void EnsambladorIA32::procesar_lea(const string& operandos) {
         return;
     }
 
-    uint8_t dest_code;
+    uint8_t dest_code=0;
     bool dest_is_reg = obtener_reg32(dest_str, dest_code);
     if (!dest_is_reg) {
         cerr << "Error: LEA solo soporta destino registro de 32 bits." << endl;
@@ -1194,13 +1230,18 @@ void EnsambladorIA32::procesar_lea(const string& operandos) {
     // LEA r32, m -> 8D /r
     agregar_byte(0x8D);
     uint8_t modrm_byte;
-    if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) {
+    if (procesar_mem_sib(src_str, modrm_byte, dest_code, false)) {
         return;
+    }
+    if (procesar_mem_disp(src_str, modrm_byte, dest_code, false)) {
+        return;
+    }
+    if (procesar_mem_simple(src_str, modrm_byte, dest_code, false)) {
+    return;
     }
 
     cerr << "Error de sintaxis o modo no soportado para LEA: " << operandos << endl;
 }
-
 
 // -----------------------------------------------------------------------------
 // Resolución de referencias pendientes
@@ -1329,4 +1370,5 @@ int main() {
     cout << "Proceso finalizado correctamente. Revisa los archivos generados.\n";
     return 0;
 }
+
 
