@@ -115,6 +115,3 @@ public:
 };
 
 #endif // ENSAMBLADOR_IA32_HPP
-
-
-
